@@ -80,6 +80,11 @@ EOF
     done
 }
 
+pause_menu() {
+    echo -e "\nبرای بازگشت به منو دکمه Enter را فشار دهید..."
+    read -r
+}
+
 list_nodes() {
     echo -e "\n--- لیست نودهای فعال ---"
     if ! grep -q "^NODE_" $ENV_FILE; then
@@ -102,7 +107,6 @@ add_node() {
     echo -e "\n--- افزودن نود جدید ---"
     echo "در حال دریافت لیست زنده کشورهای فعال از NordVPN..."
     
-    # دریافت لیست کشورها از API، جایگزینی فاصله با آندرلاین برای پردازش بهتر در آرایه‌های Bash
     local api_req
     api_req=$(curl --silent --max-time 10 https://api.nordvpn.com/v1/servers/countries | jq -r '.[].name' 2>/dev/null | sed 's/ /_/g' | sort || true)
     
@@ -135,30 +139,40 @@ add_node() {
     read -rp "شماره کشور مورد نظر را وارد کنید (1-$count): " c_sel
     
     if ! [[ "$c_sel" =~ ^[0-9]+$ ]] || [[ "$c_sel" -lt 1 ]] || [[ "$c_sel" -gt "$count" ]]; then
-        echo "❌ انتخاب نامعتبر. بازگشت به منو."
+        echo "❌ انتخاب نامعتبر. عملیات لغو شد."
         return
     fi
     
-    # بازگرداندن آندرلاین‌ها به فاصله برای داکر
     local new_country="${country_list[$((c_sel-1))]}"
     new_country="${new_country//_/ }"
     
     echo -e "✅ کشور انتخاب شده: $new_country\n"
     
     read -rp 'شناسه نود (مثلا DE): ' node_id
-    read -rp 'پورت SOCKS5 اختصاصی (مثلا 1081): ' new_port
-    
     node_id=${node_id^^}
+    
+    # پیشنهاد خودکار پورت
+    local suggested_port=1081
+    if grep -q "^NODE_" "$ENV_FILE"; then
+        local max_p
+        max_p=$(grep "^NODE_" "$ENV_FILE" | cut -d: -f2 | sort -n | tail -1)
+        if [[ -n "$max_p" ]]; then
+            suggested_port=$((max_p + 1))
+        fi
+    fi
+    
+    read -rp "پورت SOCKS5 اختصاصی [$suggested_port]: " new_port
+    new_port=${new_port:-$suggested_port}
     
     echo "NODE_${node_id}=${new_country}:${new_port}" >> $ENV_FILE
     generate_compose
     
     echo "در حال ساخت و راه‌اندازی کانتینر $node_id..."
-    docker compose up -d --remove-orphans
+    docker compose up -d --remove-orphans || { echo "❌ خطا در اجرای داکر."; return; }
     
     echo "نود مستقر شد. در حال انجام تست کیفیت شبکه..."
     sleep 3
-    test_node "$new_port"
+    test_node "$new_port" || true
 }
 
 remove_node() {
@@ -196,7 +210,7 @@ test_node() {
     
     if [[ "$response" == *"FAILED"* || -z "$response" ]]; then
          echo -e "❌ تست ناموفق بود. اتصال برقرار نشد."
-         return
+         return 1
     fi
     
     local body=$(echo "$response" | sed -e 's/TIME_TOTAL:.*//')
@@ -210,9 +224,17 @@ test_node() {
         echo "   - آی‌پی: $(echo "$body" | jq -r '.query')"
         echo "   - آی‌اس‌پی: $(echo "$body" | jq -r '.isp')"
         echo "   - زمان پاسخ: ${ping_ms}ms"
+        return 0
     else
         echo "مشکل در دریافت اطلاعات از سرور تست."
+        return 1
     fi
+}
+
+restart_all_nodes() {
+    echo -e "\n--- ریستارت تمامی نودها ---"
+    docker compose restart
+    echo "✅ تمامی نودها با موفقیت ریستارت شدند."
 }
 
 update_project() {
@@ -236,27 +258,30 @@ uninstall_project() {
 }
 
 while true; do
-    echo -e "\n=============================================="
+    clear
+    echo -e "=============================================="
     echo "             NordX-Pro SOCKS Manager"
     echo "=============================================="
     echo "  1) 👁️  لیست نودهای فعال"
     echo "  2) ➕ افزودن نود جدید"
     echo "  3) ➖ حذف یک نود"
     echo "  4) ⚡ تست اتصال و پینگ نود"
-    echo "  5) 🔄 آپدیت اسکریپت از گیت‌هاب"
-    echo "  6) 🗑️  حذف کامل پروژه"
-    echo "  7) 🚪 خروج"
+    echo "  5) 🔄 ریستارت تمامی نودها"
+    echo "  6) ⬇️  آپدیت اسکریپت از گیت‌هاب"
+    echo "  7) 🗑️  حذف کامل پروژه"
+    echo "  8) 🚪 خروج"
     echo "=============================================="
-    read -rp 'انتخاب شما [1-7]: ' choice
+    read -rp 'انتخاب شما [1-8]: ' choice
 
     case $choice in
-        1) list_nodes ;;
-        2) add_node ;;
-        3) remove_node ;;
-        4) test_node ;;
-        5) update_project ;;
-        6) uninstall_project ;;
-        7) clear; exit 0 ;;
-        *) echo "❌ انتخاب نامعتبر." ;;
+        1) list_nodes; pause_menu ;;
+        2) add_node; pause_menu ;;
+        3) remove_node; pause_menu ;;
+        4) test_node; pause_menu ;;
+        5) restart_all_nodes; pause_menu ;;
+        6) update_project; pause_menu ;;
+        7) uninstall_project ;;
+        8) clear; exit 0 ;;
+        *) echo "❌ انتخاب نامعتبر."; pause_menu ;;
     esac
 done
