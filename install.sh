@@ -11,7 +11,7 @@ fi
 
 echo "در حال نصب و بروزرسانی پیش‌نیازها..."
 apt-get update -y
-apt-get install -y git ca-certificates curl jq awk
+apt-get install -y git ca-certificates curl jq gawk
 
 if [[ -d "$BASE_DIR/.git" ]]; then
   cd "$BASE_DIR"
