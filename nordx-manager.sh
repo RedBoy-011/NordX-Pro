@@ -37,9 +37,12 @@ EOF
     sleep 2
 fi
 
-# فیلتر سخت‌گیرانه: پاکسازی فایل کانفیگ از هرگونه متغیر خراب پیش از لود شدن
-grep -E '^(NORDVPN_USERNAME|NORDVPN_PASSWORD|REQUIRE_AUTH|PROXY_USER|PROXY_PASSWORD|NODE_[A-Z0-9_]+)=' "$ENV_FILE" > "${ENV_FILE}.tmp" || true
-mv "${ENV_FILE}.tmp" "$ENV_FILE"
+# تضمین امن بودن فایل پیش از لود شدن
+if [[ -f "$ENV_FILE" ]]; then
+    awk 'BEGIN {FS="="; OFS="="} /^NODE_/ {gsub(/ /, "_", $1); gsub(/ /, "_", $2); gsub(/"/, "", $2); print $1, $2} !/^NODE_/ {print}' "$ENV_FILE" > "${ENV_FILE}.tmp" && mv "${ENV_FILE}.tmp" "$ENV_FILE"
+    grep -E '^(NORDVPN_USERNAME|NORDVPN_PASSWORD|REQUIRE_AUTH|PROXY_USER|PROXY_PASSWORD|NODE_[A-Z0-9_]+)=' "$ENV_FILE" > "${ENV_FILE}.tmp" || true
+    mv "${ENV_FILE}.tmp" "$ENV_FILE"
+fi
 
 source $ENV_FILE
 
@@ -53,6 +56,9 @@ EOF
         local val=$(echo "$line" | cut -d= -f2)
         local country=$(echo "$val" | cut -d: -f1)
         local port=$(echo "$val" | cut -d: -f2)
+        
+        # تبدیل مجدد آندرلاین به فاصله برای اتصال به کانتینر
+        local country_spaced="${country//_/ }"
 
         cat <<EOF >> $COMPOSE_FILE
   vpn-${node_id,,}:
@@ -65,7 +71,7 @@ EOF
       - VPN_TYPE=openvpn
       - OPENVPN_USER=\${NORDVPN_USERNAME}
       - OPENVPN_PASSWORD=\${NORDVPN_PASSWORD}
-      - SERVER_COUNTRIES=${country}
+      - SERVER_COUNTRIES=${country_spaced}
       - TZ=Europe/Istanbul
     ports: ["127.0.0.1:${port}:1080"]
     restart: unless-stopped
@@ -103,7 +109,8 @@ list_nodes() {
         local port=$(echo "$val" | cut -d: -f2)
         local status=$(docker inspect -f '{{.State.Status}}' "nord-socks-${node_id,,}" 2>/dev/null || echo "توقف/ناموجود")
         
-        printf "نود: %-18s | کشور: %-18s | پورت: %-6s | وضعیت: %s\n" "$node_id" "$country" "$port" "$status"
+        local country_spaced="${country//_/ }"
+        printf "نود: %-18s | کشور: %-18s | پورت: %-6s | وضعیت: %s\n" "$node_id" "$country_spaced" "$port" "$status"
     done
 }
 
@@ -203,7 +210,7 @@ add_node() {
     
     local base_id="${new_country// /_}"
     base_id="${base_id^^}"
-    base_id=$(echo "$base_id" | tr -cd 'A-Z0-9_') # فیلتر کاراکترهای غیرمجاز
+    base_id=$(echo "$base_id" | tr -cd 'A-Z0-9_')
     
     local node_id="$base_id"
     local counter=2
@@ -228,7 +235,9 @@ add_node() {
     read -rp "پورت SOCKS5 اختصاصی [$suggested_port]: " new_port
     new_port=${new_port:-$suggested_port}
     
-    echo "NODE_${node_id}=${new_country}:${new_port}" >> $ENV_FILE
+    # ذخیره کاملا امن برای باش (تبدیل فاصله‌ها به آندرلاین)
+    local safe_country="${new_country// /_}"
+    echo "NODE_${node_id}=${safe_country}:${new_port}" >> $ENV_FILE
     generate_compose
     
     echo "در حال ساخت کانتینر $node_id..."
@@ -277,7 +286,8 @@ edit_node_port() {
         node_ids+=("$nid")
         node_countries+=("$country")
         node_ports+=("$port")
-        echo "  $i) نود: $nid | کشور: $country | پورت فعلی: $port"
+        local country_spaced="${country//_/ }"
+        echo "  $i) نود: $nid | کشور: $country_spaced | پورت فعلی: $port"
         ((i++))
     done < <(grep "^NODE_" "$ENV_FILE")
 
@@ -345,7 +355,8 @@ remove_node() {
         local val=$(echo "$line" | cut -d= -f2)
         local country=$(echo "$val" | cut -d: -f1)
         node_ids+=("$nid")
-        echo "  $i) نود: $nid | کشور: $country"
+        local country_spaced="${country//_/ }"
+        echo "  $i) نود: $nid | کشور: $country_spaced"
         ((i++))
     done < <(grep "^NODE_" "$ENV_FILE")
 
@@ -393,7 +404,8 @@ test_node_menu() {
         local port=$(echo "$val" | cut -d: -f2)
         node_ports+=("$port")
         node_names+=("$nid")
-        echo "  $i) نود: $nid | کشور: $country | پورت: $port"
+        local country_spaced="${country//_/ }"
+        echo "  $i) نود: $nid | کشور: $country_spaced | پورت: $port"
         ((i++))
     done < <(grep "^NODE_" "$ENV_FILE")
 
