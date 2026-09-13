@@ -37,7 +37,6 @@ EOF
     sleep 2
 fi
 
-# تضمین امن بودن فایل پیش از لود شدن
 if [[ -f "$ENV_FILE" ]]; then
     awk 'BEGIN {FS="="; OFS="="} /^NODE_/ {gsub(/ /, "_", $1); gsub(/ /, "_", $2); gsub(/"/, "", $2); print $1, $2} !/^NODE_/ {print}' "$ENV_FILE" > "${ENV_FILE}.tmp" && mv "${ENV_FILE}.tmp" "$ENV_FILE"
     grep -E '^(NORDVPN_USERNAME|NORDVPN_PASSWORD|REQUIRE_AUTH|PROXY_USER|PROXY_PASSWORD|NODE_[A-Z0-9_]+)=' "$ENV_FILE" > "${ENV_FILE}.tmp" || true
@@ -73,6 +72,12 @@ EOF
       - OPENVPN_PASSWORD=\${NORDVPN_PASSWORD}
       - SERVER_COUNTRIES=${country_spaced}
       - TZ=Europe/Istanbul
+      - BLOCK_MALICIOUS=off
+      - BLOCK_SURVEILLANCE=off
+      - BLOCK_ADS=off
+      - DOT=off
+      - IPV6=off
+      - UPDATER_PERIOD=0
     ports: ["127.0.0.1:${port}:1080"]
     restart: unless-stopped
 
@@ -116,20 +121,48 @@ list_nodes() {
 }
 
 view_logs() {
-    list_nodes
     echo -e "\n--- مشاهده لاگ نودها ---"
-    echo "می‌توانید شناسه یک نود خاص را وارد کنید یا با کلمه ALL لاگ همه را ببینید."
-    read -rp 'شناسه نود (مثلا GERMANY یا ALL): ' log_id
-    log_id=${log_id^^}
-    log_id=$(echo "$log_id" | tr -cd 'A-Z0-9_')
+    if ! grep -q "^NODE_" "$ENV_FILE"; then
+        echo "هیچ نودی برای مشاهده لاگ وجود ندارد."
+        return
+    fi
+
+    local -a node_ids=()
+    local i=1
     
-    if [[ "$log_id" == "ALL" ]]; then
+    echo "  0) 🌐 مشاهده لاگ تمامی نودها (ALL)"
+    while read -r line; do
+        local nid=$(echo "$line" | cut -d= -f1 | sed 's/NODE_//')
+        local val=$(echo "$line" | cut -d= -f2)
+        local country=$(echo "$val" | cut -d: -f1)
+        node_ids+=("$nid")
+        local country_spaced="${country//_/ }"
+        echo "  $i) نود: $nid | کشور: $country_spaced"
+        ((i++))
+    done < <(grep "^NODE_" "$ENV_FILE" || true)
+
+    local count=${#node_ids[@]}
+    echo ""
+    read -rp "شماره نود جهت مشاهده لاگ را وارد کنید (0-$count): " log_sel
+    
+    if [[ -z "$log_sel" ]]; then
+        echo "عملیات لغو شد."
+        return
+    fi
+
+    if ! [[ "$log_sel" =~ ^[0-9]+$ ]] || [[ "$log_sel" -lt 0 ]] || [[ "$log_sel" -gt "$count" ]]; then
+        echo "❌ انتخاب نامعتبر است."
+        return
+    fi
+
+    if [[ "$log_sel" -eq 0 ]]; then
+        echo "--- نمایش ۵۰ خط آخر لاگ برای تمامی نودها ---"
         docker compose logs --tail=50 || true
-    elif grep -q "^NODE_${log_id}=" "$ENV_FILE"; then
-        echo "--- نمایش ۵۰ خط آخر لاگ برای نود $log_id ---"
-        docker compose logs --tail=50 "vpn-${log_id,,}" "socks-${log_id,,}" || true
     else
-        echo "❌ شناسه نامعتبر است."
+        local sel_idx=$((log_sel-1))
+        local target_id="${node_ids[$sel_idx]}"
+        echo "--- نمایش ۵۰ خط آخر لاگ برای نود $target_id ---"
+        docker compose logs --tail=50 "vpn-${target_id,,}" "socks-${target_id,,}" || true
     fi
 }
 
@@ -452,18 +485,15 @@ test_node_menu() {
 }
 
 restart_all_nodes() {
-    echo -e "\n--- راه‌اندازی مجدد و پاک‌سازی شبکه تمامی نودها ---"
+    echo -e "\n--- راه‌اندازی مجدد و اعمال بهینه‌سازی روی تمامی نودها ---"
     docker compose down || true
     
-    echo "در حال اجرای مجدد سرویس‌ها..."
+    echo "در حال اجرای مجدد سرویس‌ها با کانفیگ سبک..."
+    generate_compose
     if ! docker compose up -d --remove-orphans; then
-        echo -e "\n❌ خطا در راه‌اندازی یک یا چند نود (dependency failed)!"
-        echo "--- خلاصه لاگ خطا ---"
-        docker compose logs --tail=20 | grep -i -E "error|warn|fatal|unhealthy|failed" || true
-        echo "----------------------"
-        echo "دلیل: یکی از کانتینرهای VPN نتوانسته است متصل شود (احتمالاً به دلیل مشکل Credentials یا بلاک شدن شبکه). به همین دلیل کانتینر SOCKS وابسته به آن نمی‌تواند روشن شود."
+        echo -e "\n❌ خطا در راه‌اندازی یک یا چند نود!"
     else
-        echo "✅ تمامی نودها با موفقیت از نو ساخته و راه‌اندازی شدند."
+        echo "✅ تمامی نودها با موفقیت از نو ساخته و بهینه‌سازی شدند."
     fi
 }
 
