@@ -37,8 +37,9 @@ EOF
     sleep 2
 fi
 
-# خودترمیم: اصلاح شناسه‌های خراب پیش از لود شدن
-awk 'BEGIN {FS="="; OFS="="} /^NODE_/ {gsub(/ /, "_", $1); print} !/^NODE_/ {print}' "$ENV_FILE" > "${ENV_FILE}.tmp" && mv "${ENV_FILE}.tmp" "$ENV_FILE"
+# فیلتر سخت‌گیرانه: پاکسازی فایل کانفیگ از هرگونه متغیر خراب پیش از لود شدن
+grep -E '^(NORDVPN_USERNAME|NORDVPN_PASSWORD|REQUIRE_AUTH|PROXY_USER|PROXY_PASSWORD|NODE_[A-Z0-9_]+)=' "$ENV_FILE" > "${ENV_FILE}.tmp" || true
+mv "${ENV_FILE}.tmp" "$ENV_FILE"
 
 source $ENV_FILE
 
@@ -112,7 +113,7 @@ view_logs() {
     echo "می‌توانید شناسه یک نود خاص را وارد کنید یا با کلمه ALL لاگ همه را ببینید."
     read -rp 'شناسه نود (مثلا GERMANY یا ALL): ' log_id
     log_id=${log_id^^}
-    log_id=${log_id// /_}
+    log_id=$(echo "$log_id" | tr -cd 'A-Z0-9_')
     
     if [[ "$log_id" == "ALL" ]]; then
         docker compose logs --tail=50
@@ -202,6 +203,8 @@ add_node() {
     
     local base_id="${new_country// /_}"
     base_id="${base_id^^}"
+    base_id=$(echo "$base_id" | tr -cd 'A-Z0-9_') # فیلتر کاراکترهای غیرمجاز
+    
     local node_id="$base_id"
     local counter=2
     
