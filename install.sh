@@ -11,7 +11,7 @@ fi
 
 echo "در حال نصب و بروزرسانی پیش‌نیازها..."
 apt-get update -y
-apt-get install -y git ca-certificates curl jq
+apt-get install -y git ca-certificates curl jq awk
 
 if [[ -d "$BASE_DIR/.git" ]]; then
   cd "$BASE_DIR"
@@ -23,8 +23,9 @@ else
   cd "$BASE_DIR"
 fi
 
-# فیلتر سخت‌گیرانه: پاکسازی فایل کانفیگ از هرگونه خط خراب برای جلوگیری از کرش شدن ترمینال
+# خودترمیم ریشه‌ای: تبدیل تمام فاصله‌های بعد از مساوی به آندرلاین تا دستور source کرش نکند
 if [[ -f "$BASE_DIR/.env" ]]; then
+  awk 'BEGIN {FS="="; OFS="="} /^NODE_/ {gsub(/ /, "_", $1); gsub(/ /, "_", $2); gsub(/"/, "", $2); print $1, $2} !/^NODE_/ {print}' "$BASE_DIR/.env" > "$BASE_DIR/.env.tmp" && mv "$BASE_DIR/.env.tmp" "$BASE_DIR/.env"
   grep -E '^(NORDVPN_USERNAME|NORDVPN_PASSWORD|REQUIRE_AUTH|PROXY_USER|PROXY_PASSWORD|NODE_[A-Z0-9_]+)=' "$BASE_DIR/.env" > "$BASE_DIR/.env.tmp" || true
   mv "$BASE_DIR/.env.tmp" "$BASE_DIR/.env"
 fi
