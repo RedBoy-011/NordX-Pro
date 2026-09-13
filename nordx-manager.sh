@@ -57,7 +57,6 @@ EOF
         local country=$(echo "$val" | cut -d: -f1)
         local port=$(echo "$val" | cut -d: -f2)
         
-        # تبدیل مجدد آندرلاین به فاصله برای اتصال به کانتینر
         local country_spaced="${country//_/ }"
 
         cat <<EOF >> $COMPOSE_FILE
@@ -235,7 +234,6 @@ add_node() {
     read -rp "پورت SOCKS5 اختصاصی [$suggested_port]: " new_port
     new_port=${new_port:-$suggested_port}
     
-    # ذخیره کاملا امن برای باش (تبدیل فاصله‌ها به آندرلاین)
     local safe_country="${new_country// /_}"
     echo "NODE_${node_id}=${safe_country}:${new_port}" >> $ENV_FILE
     generate_compose
@@ -436,9 +434,10 @@ test_node_menu() {
 }
 
 restart_all_nodes() {
-    echo -e "\n--- ریستارت تمامی نودها ---"
-    docker compose restart
-    echo "✅ تمامی نودها با موفقیت ریستارت شدند."
+    echo -e "\n--- راه‌اندازی مجدد و پاک‌سازی شبکه تمامی نودها ---"
+    docker compose down || true
+    docker compose up -d --remove-orphans
+    echo "✅ تمامی نودها با موفقیت از نو ساخته و راه‌اندازی شدند."
 }
 
 update_project() {
