@@ -8,9 +8,6 @@ COMPOSE_FILE="$PROJECT_DIR/docker-compose.yml"
 
 cd "$PROJECT_DIR" || exit 1
 
-# ==========================================
-# دریافت اطلاعات اولیه (فقط بار اول)
-# ==========================================
 if [[ ! -f $ENV_FILE ]]; then
     clear
     echo "=== پیکربندی اولیه NordX-Pro ==="
@@ -43,9 +40,6 @@ fi
 
 source $ENV_FILE
 
-# ==========================================
-# تولید خودکار فایل داکر
-# ==========================================
 generate_compose() {
     cat <<EOF > $COMPOSE_FILE
 services:
@@ -87,9 +81,6 @@ EOF
     done
 }
 
-# ==========================================
-# مدیریت نودها
-# ==========================================
 list_nodes() {
     echo -e "\n--- لیست نودهای فعال ---"
     if ! grep -q "^NODE_" $ENV_FILE; then
@@ -185,7 +176,7 @@ update_project() {
     echo "در حال آپدیت از مخزن گیت‌هاب..."
     git stash push -m "Backup configs" >/dev/null 2>&1 || true
     git pull origin main
-    chmod +x nordx-manager.sh
+    chmod +x "$PROJECT_DIR/nordx-manager.sh"
     echo "آپدیت انجام شد (اطلاعات اتصال شما حفظ شده است)."
 }
 
@@ -193,7 +184,7 @@ uninstall_project() {
     read -rp 'آیا از حذف کامل کانتینرها، اطلاعات و پاک شدن اسکریپت اطمینان دارید؟ (y/n): ' confirm
     if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
         docker compose down -v || true
-        rm -f /usr/local/bin/nordx
+        rm -f /usr/bin/nordx
         cd /
         rm -rf "$PROJECT_DIR"
         echo "پروژه NordX-Pro به طور کامل حذف شد."
@@ -201,9 +192,6 @@ uninstall_project() {
     fi
 }
 
-# ==========================================
-# رابط کاربری منو
-# ==========================================
 while true; do
     echo -e "\n=============================================="
     echo "             NordX-Pro SOCKS Manager"
