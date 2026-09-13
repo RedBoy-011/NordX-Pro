@@ -25,4 +25,4 @@
 برای نصب کامل پروژه، ساختارهای داکر و ایجاد دسترسی سراسری، فقط کافیست دستور زیر را با دسترسی `root` در ترمینال سرور خود وارد کنید:
 
 ```bash
-curl -fsSL [https://raw.githubusercontent.com/RedBoy-011/NordX-Pro/main/install.sh](https://raw.githubusercontent.com/RedBoy-011/NordX-Pro/main/install.sh) | sudo bash
+curl -fsSL https://raw.githubusercontent.com/RedBoy-011/NordX-Pro/main/install.sh | sudo bash
