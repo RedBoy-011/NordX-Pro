@@ -26,7 +26,7 @@ if [[ ! -f $ENV_FILE ]]; then
         read -rsp 'SOCKS5 Password: ' sx_pass; echo
     fi
     
-    cat <<EOF > $ENV_FILE
+    cat <<EOF > "$ENV_FILE"
 NORDVPN_USERNAME=$nv_user
 NORDVPN_PASSWORD=$nv_pass
 REQUIRE_AUTH=$req_auth
@@ -44,22 +44,23 @@ if [[ -f "$ENV_FILE" ]]; then
     mv "${ENV_FILE}.tmp" "$ENV_FILE"
 fi
 
-source $ENV_FILE
+source "$ENV_FILE"
 
 generate_compose() {
-    cat <<EOF > $COMPOSE_FILE
+    cat <<EOF > "$COMPOSE_FILE"
 services:
 EOF
     
-    grep "^NODE_" $ENV_FILE | while read -r line; do
-        local node_id=$(echo "$line" | cut -d= -f1 | sed 's/NODE_//')
-        local val=$(echo "$line" | cut -d= -f2)
-        local country=$(echo "$val" | cut -d: -f1)
-        local port=$(echo "$val" | cut -d: -f2)
-        
-        local country_spaced="${country//_/ }"
+    if grep -q "^NODE_" "$ENV_FILE"; then
+        grep "^NODE_" "$ENV_FILE" | while read -r line; do
+            local node_id=$(echo "$line" | cut -d= -f1 | sed 's/NODE_//')
+            local val=$(echo "$line" | cut -d= -f2)
+            local country=$(echo "$val" | cut -d: -f1)
+            local port=$(echo "$val" | cut -d: -f2)
+            
+            local country_spaced="${country//_/ }"
 
-        cat <<EOF >> $COMPOSE_FILE
+            cat <<EOF >> "$COMPOSE_FILE"
   vpn-${node_id,,}:
     image: qmcgaw/gluetun:v3.40.0
     container_name: nord-socks-${node_id,,}
@@ -86,7 +87,8 @@ EOF
     restart: unless-stopped
 
 EOF
-    done
+        done
+    fi
 }
 
 pause_menu() {
@@ -96,12 +98,12 @@ pause_menu() {
 
 list_nodes() {
     echo -e "\n--- لیست نودهای فعال ---"
-    if ! grep -q "^NODE_" $ENV_FILE; then
+    if ! grep -q "^NODE_" "$ENV_FILE"; then
         echo "هیچ نودی ثبت نشده است."
         return
     fi
     
-    grep "^NODE_" $ENV_FILE | while read -r line; do
+    grep "^NODE_" "$ENV_FILE" | while read -r line; do
         local node_id=$(echo "$line" | cut -d= -f1 | sed 's/NODE_//')
         local val=$(echo "$line" | cut -d= -f2)
         local country=$(echo "$val" | cut -d: -f1)
@@ -122,10 +124,10 @@ view_logs() {
     log_id=$(echo "$log_id" | tr -cd 'A-Z0-9_')
     
     if [[ "$log_id" == "ALL" ]]; then
-        docker compose logs --tail=50
+        docker compose logs --tail=50 || true
     elif grep -q "^NODE_${log_id}=" "$ENV_FILE"; then
         echo "--- نمایش ۵۰ خط آخر لاگ برای نود $log_id ---"
-        docker compose logs --tail=50 "vpn-${log_id,,}" "socks-${log_id,,}"
+        docker compose logs --tail=50 "vpn-${log_id,,}" "socks-${log_id,,}" || true
     else
         echo "❌ شناسه نامعتبر است."
     fi
@@ -147,7 +149,7 @@ do_ping_test() {
     fi
     
     local body=$(echo "$response" | sed -e 's/TIME_TOTAL:.*//')
-    local time_val=$(echo "$response" | grep -o 'TIME_TOTAL:.*' | cut -d: -f2)
+    local time_val=$(echo "$response" | grep -o 'TIME_TOTAL:.*' | cut -d: -f2 || true)
     local ping_ms=$(awk "BEGIN {print int($time_val * 1000)}")
     local check_status=$(echo "$body" | jq -r '.status' 2>/dev/null || echo "fail")
     
@@ -225,7 +227,7 @@ add_node() {
     local suggested_port=1082
     if grep -q "^NODE_" "$ENV_FILE"; then
         local max_p
-        max_p=$(grep "^NODE_" "$ENV_FILE" | cut -d: -f2 | sort -n | tail -1)
+        max_p=$(grep "^NODE_" "$ENV_FILE" | cut -d: -f2 | sort -n | tail -1 || true)
         if [[ -n "$max_p" ]] && [[ "$max_p" -ge 1082 ]]; then
             suggested_port=$((max_p + 1))
         fi
@@ -235,11 +237,20 @@ add_node() {
     new_port=${new_port:-$suggested_port}
     
     local safe_country="${new_country// /_}"
-    echo "NODE_${node_id}=${safe_country}:${new_port}" >> $ENV_FILE
+    echo "NODE_${node_id}=${safe_country}:${new_port}" >> "$ENV_FILE"
     generate_compose
     
     echo "در حال ساخت کانتینر $node_id..."
-    docker compose up -d --remove-orphans || true
+    if ! docker compose up -d --remove-orphans; then
+        echo -e "\n❌ خطا در راه‌اندازی کانتینر داکر پیش آمد!"
+        echo "--- لاگ خطا ---"
+        docker compose logs --tail=15 "vpn-${node_id,,}" | grep -i -E "error|warn|fatal|failed" || true
+        echo "---------------"
+        echo "⚠️ در حال پاک‌سازی نود نصب نشده..."
+        sed -i "/^NODE_${node_id}=/d" "$ENV_FILE" || true
+        generate_compose
+        return
+    fi
     
     echo "⏳ در حال برقراری تونل امن (لطفاً ۲۰ ثانیه شکیبا باشید)..."
     sleep 20
@@ -255,7 +266,7 @@ add_node() {
         echo "⚠️ در حال حذف نود معیوب و بازگردانی تنظیمات..."
         
         docker compose rm -sf "vpn-${node_id,,}" "socks-${node_id,,}" >/dev/null 2>&1 || true
-        sed -i "/^NODE_${node_id}=/d" "$ENV_FILE"
+        sed -i "/^NODE_${node_id}=/d" "$ENV_FILE" || true
         generate_compose
         docker compose up -d --remove-orphans >/dev/null 2>&1 || true
         
@@ -287,7 +298,7 @@ edit_node_port() {
         local country_spaced="${country//_/ }"
         echo "  $i) نود: $nid | کشور: $country_spaced | پورت فعلی: $port"
         ((i++))
-    done < <(grep "^NODE_" "$ENV_FILE")
+    done < <(grep "^NODE_" "$ENV_FILE" || true)
 
     local count=${#node_ids[@]}
     echo ""
@@ -311,7 +322,7 @@ edit_node_port() {
     local suggested_port=1082
     if grep -q "^NODE_" "$ENV_FILE"; then
         local max_p
-        max_p=$(grep "^NODE_" "$ENV_FILE" | cut -d: -f2 | sort -n | tail -1)
+        max_p=$(grep "^NODE_" "$ENV_FILE" | cut -d: -f2 | sort -n | tail -1 || true)
         if [[ -n "$max_p" ]] && [[ "$max_p" -ge 1082 ]]; then
             suggested_port=$((max_p + 1))
         fi
@@ -326,10 +337,14 @@ edit_node_port() {
     fi
 
     echo "در حال بروزرسانی پورت نود $target_id به $new_port..."
-    sed -i "s/^NODE_${target_id}=.*/NODE_${target_id}=${target_country}:${new_port}/" "$ENV_FILE"
+    sed -i "s/^NODE_${target_id}=.*/NODE_${target_id}=${target_country}:${new_port}/" "$ENV_FILE" || true
     generate_compose
     
-    docker compose up -d --remove-orphans "vpn-${target_id,,}" "socks-${target_id,,}" >/dev/null 2>&1 || true
+    if ! docker compose up -d --remove-orphans "vpn-${target_id,,}" "socks-${target_id,,}" >/dev/null 2>&1; then
+        echo "❌ خطایی در راه‌اندازی کانتینر پیش آمد."
+        return
+    fi
+    
     echo "✅ پورت SOCKS5 نود $target_id با موفقیت به $new_port تغییر یافت."
     
     echo "⏳ در حال برقراری مجدد تونل امن..."
@@ -356,7 +371,7 @@ remove_node() {
         local country_spaced="${country//_/ }"
         echo "  $i) نود: $nid | کشور: $country_spaced"
         ((i++))
-    done < <(grep "^NODE_" "$ENV_FILE")
+    done < <(grep "^NODE_" "$ENV_FILE" || true)
 
     local count=${#node_ids[@]}
     echo ""
@@ -376,11 +391,14 @@ remove_node() {
     
     echo "در حال متوقف کردن و حذف کانتینر $rm_id..."
     docker compose rm -sf "vpn-${rm_id,,}" "socks-${rm_id,,}" 2>/dev/null || true
-    sed -i "/^NODE_${rm_id}=/d" "$ENV_FILE"
+    sed -i "/^NODE_${rm_id}=/d" "$ENV_FILE" || true
     generate_compose
-    docker compose up -d --remove-orphans >/dev/null 2>&1 || true
     
-    echo "✅ نود $rm_id با موفقیت حذف شد."
+    if ! docker compose up -d --remove-orphans >/dev/null 2>&1; then
+        echo "⚠️ مشکلی در بروزرسانی کانتینرها به وجود آمد، اما نود از فایل حذف شد."
+    else
+        echo "✅ نود $rm_id با موفقیت حذف شد."
+    fi
 }
 
 test_node_menu() {
@@ -405,7 +423,7 @@ test_node_menu() {
         local country_spaced="${country//_/ }"
         echo "  $i) نود: $nid | کشور: $country_spaced | پورت: $port"
         ((i++))
-    done < <(grep "^NODE_" "$ENV_FILE")
+    done < <(grep "^NODE_" "$ENV_FILE" || true)
 
     local count=${#node_ports[@]}
     echo ""
@@ -429,22 +447,31 @@ test_node_menu() {
     else
         local sel_idx=$((t_sel-1))
         echo -e "\n--- در حال تست نود ${node_names[$sel_idx]} (پورت ${node_ports[$sel_idx]}) ---"
-        do_ping_test "${node_ports[$sel_idx]}"
+        do_ping_test "${node_ports[$sel_idx]}" || true
     fi
 }
 
 restart_all_nodes() {
     echo -e "\n--- راه‌اندازی مجدد و پاک‌سازی شبکه تمامی نودها ---"
     docker compose down || true
-    docker compose up -d --remove-orphans
-    echo "✅ تمامی نودها با موفقیت از نو ساخته و راه‌اندازی شدند."
+    
+    echo "در حال اجرای مجدد سرویس‌ها..."
+    if ! docker compose up -d --remove-orphans; then
+        echo -e "\n❌ خطا در راه‌اندازی یک یا چند نود (dependency failed)!"
+        echo "--- خلاصه لاگ خطا ---"
+        docker compose logs --tail=20 | grep -i -E "error|warn|fatal|unhealthy|failed" || true
+        echo "----------------------"
+        echo "دلیل: یکی از کانتینرهای VPN نتوانسته است متصل شود (احتمالاً به دلیل مشکل Credentials یا بلاک شدن شبکه). به همین دلیل کانتینر SOCKS وابسته به آن نمی‌تواند روشن شود."
+    else
+        echo "✅ تمامی نودها با موفقیت از نو ساخته و راه‌اندازی شدند."
+    fi
 }
 
 update_project() {
     echo "در حال آپدیت از مخزن گیت‌هاب..."
     git stash push -m "Backup configs" >/dev/null 2>&1 || true
-    git pull origin main
-    chmod +x "$PROJECT_DIR/nordx-manager.sh"
+    git pull origin main || true
+    chmod +x "$PROJECT_DIR/nordx-manager.sh" || true
     echo "✅ آپدیت انجام شد."
     
     echo "در حال بارگذاری مجدد منو..."
@@ -456,9 +483,9 @@ uninstall_project() {
     read -rp 'آیا از حذف کامل کانتینرها، اطلاعات و پاک شدن اسکریپت اطمینان دارید؟ (y/n): ' confirm
     if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
         docker compose down -v || true
-        rm -f /usr/bin/nordx
+        rm -f /usr/bin/nordx || true
         cd /
-        rm -rf "$PROJECT_DIR"
+        rm -rf "$PROJECT_DIR" || true
         echo "🗑️ پروژه NordX-Pro به طور کامل حذف شد."
         exit 0
     fi
