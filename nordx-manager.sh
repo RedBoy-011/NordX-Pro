@@ -99,7 +99,7 @@ list_nodes() {
         local port=$(echo "$val" | cut -d: -f2)
         local status=$(docker inspect -f '{{.State.Status}}' "nord-socks-${node_id,,}" 2>/dev/null || echo "توقف/ناموجود")
         
-        printf "نود: %-4s | کشور: %-18s | پورت: %-6s | وضعیت: %s\n" "$node_id" "$country" "$port" "$status"
+        printf "نود: %-8s | کشور: %-18s | پورت: %-6s | وضعیت: %s\n" "$node_id" "$country" "$port" "$status"
     done
 }
 
@@ -109,6 +109,7 @@ view_logs() {
     echo "می‌توانید شناسه یک نود خاص را وارد کنید یا با کلمه ALL لاگ همه را ببینید."
     read -rp 'شناسه نود (مثلا DE یا ALL): ' log_id
     log_id=${log_id^^}
+    log_id=${log_id// /_} # حذف فاصله‌های احتمالی
     
     if [[ "$log_id" == "ALL" ]]; then
         docker compose logs --tail=50
@@ -166,6 +167,8 @@ add_node() {
     echo -e "✅ کشور انتخاب شده: $new_country\n"
     
     read -rp 'شناسه نود (مثلا DE): ' node_id
+    # حذف فاصله‌ها و کاراکترهای غیرمجاز برای جلوگیری از خرابی فایل env
+    node_id=${node_id// /_}
     node_id=${node_id^^}
     
     local suggested_port=1081
