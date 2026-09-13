@@ -37,6 +37,9 @@ EOF
     sleep 2
 fi
 
+# خودترمیم: اصلاح شناسه‌های خراب پیش از لود شدن
+awk 'BEGIN {FS="="; OFS="="} /^NODE_/ {gsub(/ /, "_", $1); print} !/^NODE_/ {print}' "$ENV_FILE" > "${ENV_FILE}.tmp" && mv "${ENV_FILE}.tmp" "$ENV_FILE"
+
 source $ENV_FILE
 
 generate_compose() {
@@ -428,7 +431,11 @@ update_project() {
     git stash push -m "Backup configs" >/dev/null 2>&1 || true
     git pull origin main
     chmod +x "$PROJECT_DIR/nordx-manager.sh"
-    echo "✅ آپدیت انجام شد (تنظیمات شما حفظ شده است)."
+    echo "✅ آپدیت انجام شد."
+    
+    echo "در حال بارگذاری مجدد منو..."
+    sleep 1
+    exec /usr/bin/nordx
 }
 
 uninstall_project() {
@@ -469,7 +476,7 @@ while true; do
         5) test_node_menu; pause_menu ;;
         6) view_logs; pause_menu ;;
         7) restart_all_nodes; pause_menu ;;
-        8) update_project; pause_menu ;;
+        8) update_project ;;
         9) uninstall_project ;;
         10) clear; exit 0 ;;
         *) echo "❌ انتخاب نامعتبر."; pause_menu ;;
