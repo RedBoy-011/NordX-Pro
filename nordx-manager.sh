@@ -168,7 +168,6 @@ add_node() {
     read -rp 'شناسه نود (مثلا DE): ' node_id
     node_id=${node_id^^}
     
-    # پیشنهاد خودکار پورت
     local suggested_port=1081
     if grep -q "^NODE_" "$ENV_FILE"; then
         local max_p
@@ -181,7 +180,6 @@ add_node() {
     read -rp "پورت SOCKS5 اختصاصی [$suggested_port]: " new_port
     new_port=${new_port:-$suggested_port}
     
-    # ثبت موقت در فایل کانفیگ
     echo "NODE_${node_id}=${new_country}:${new_port}" >> $ENV_FILE
     generate_compose
     
@@ -201,7 +199,6 @@ add_node() {
         echo -e "----------------------"
         echo "⚠️ در حال حذف نود معیوب و بازگردانی تنظیمات..."
         
-        # Rollback: حذف از فایل و متوقف کردن کانتینر
         docker compose rm -sf "vpn-${node_id,,}" "socks-${node_id,,}" >/dev/null 2>&1 || true
         sed -i "/^NODE_${node_id}=/d" "$ENV_FILE"
         generate_compose
@@ -212,20 +209,48 @@ add_node() {
 }
 
 remove_node() {
-    list_nodes
     echo -e "\n--- حذف نود ---"
-    read -rp 'شناسه نود برای حذف (مثلا DE): ' rm_id
-    rm_id=${rm_id^^}
-    
-    if grep -q "^NODE_${rm_id}=" $ENV_FILE; then
-        docker compose rm -sf "vpn-${rm_id,,}" "socks-${rm_id,,}" 2>/dev/null || true
-        sed -i "/^NODE_${rm_id}=/d" $ENV_FILE
-        generate_compose
-        docker compose up -d --remove-orphans
-        echo "✅ نود $rm_id با موفقیت حذف شد."
-    else
-        echo "❌ شناسه نامعتبر است."
+    if ! grep -q "^NODE_" "$ENV_FILE"; then
+        echo "هیچ نودی برای حذف وجود ندارد."
+        return
     fi
+
+    local -a node_ids=()
+    local i=1
+    
+    echo "لیست نودهای فعال:"
+    while read -r line; do
+        local nid=$(echo "$line" | cut -d= -f1 | sed 's/NODE_//')
+        local val=$(echo "$line" | cut -d= -f2)
+        local country=$(echo "$val" | cut -d: -f1)
+        node_ids+=("$nid")
+        echo "  $i) نود: $nid | کشور: $country"
+        ((i++))
+    done < <(grep "^NODE_" "$ENV_FILE")
+
+    local count=${#node_ids[@]}
+    echo ""
+    read -rp "شماره نود جهت حذف را وارد کنید (1-$count) [یا 0 برای انصراف]: " rm_sel
+    
+    if [[ "$rm_sel" == "0" || -z "$rm_sel" ]]; then
+        echo "عملیات لغو شد."
+        return
+    fi
+
+    if ! [[ "$rm_sel" =~ ^[0-9]+$ ]] || [[ "$rm_sel" -lt 1 ]] || [[ "$rm_sel" -gt "$count" ]]; then
+        echo "❌ انتخاب نامعتبر است."
+        return
+    fi
+
+    local rm_id="${node_ids[$((rm_sel-1))]}"
+    
+    echo "در حال متوقف کردن و حذف کانتینر $rm_id..."
+    docker compose rm -sf "vpn-${rm_id,,}" "socks-${rm_id,,}" 2>/dev/null || true
+    sed -i "/^NODE_${rm_id}=/d" "$ENV_FILE"
+    generate_compose
+    docker compose up -d --remove-orphans >/dev/null 2>&1 || true
+    
+    echo "✅ نود $rm_id با موفقیت حذف شد."
 }
 
 test_node() {
