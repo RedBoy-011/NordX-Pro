@@ -200,7 +200,7 @@ do_ping_test() {
 }
 
 add_node() {
-    echo -e "\n--- افزودن نود جدید ---"
+    echo -e "\n--- افزودن نود جدید (تکی یا گروهی) ---"
     echo "در حال دریافت لیست زنده کشورهای فعال از NordVPN..."
     
     local api_req
@@ -218,7 +218,7 @@ add_node() {
     local cols=3
     local rows=$(( (count + cols - 1) / cols ))
 
-    echo -e "\nکشورهای در دسترس (انتخاب با شماره):\n"
+    echo -e "\nکشورهای در دسترس:\n"
     for (( i=0; i<rows; i++ )); do
         local line=""
         for (( j=0; j<cols; j++ )); do
@@ -231,80 +231,82 @@ add_node() {
         echo "$line"
     done
 
-    echo ""
-    read -rp "شماره کشور مورد نظر را وارد کنید (1-$count): " c_sel
+    echo -e "\nمی‌توانید یک یا چند کشور را به صورت همزمان وارد کنید."
+    read -rp "شماره کشور(ها) را وارد کنید (با فاصله یا کاما جدا کنید، مثلا 1 5 12): " c_inputs
     
-    if ! [[ "$c_sel" =~ ^[0-9]+$ ]] || [[ "$c_sel" -lt 1 ]] || [[ "$c_sel" -gt "$count" ]]; then
-        echo "❌ انتخاب نامعتبر. عملیات لغو شد."
+    # تبدیل کاما به فاصله برای پردازش راحت در لوپ
+    c_inputs="${c_inputs//,/ }"
+    
+    if [[ -z "$c_inputs" ]]; then
+        echo "عملیات لغو شد."
         return
     fi
     
-    local new_country="${country_list[$((c_sel-1))]}"
-    new_country="${new_country//_/ }"
-    
-    local base_id="${new_country// /_}"
-    base_id="${base_id^^}"
-    base_id=$(echo "$base_id" | tr -cd 'A-Z0-9_')
-    
-    local node_id="$base_id"
-    local counter=2
-    
-    while grep -q "^NODE_${node_id}=" "$ENV_FILE"; do
-        node_id="${base_id}_${counter}"
-        ((counter++))
+    for c_sel in $c_inputs; do
+        if ! [[ "$c_sel" =~ ^[0-9]+$ ]] || [[ "$c_sel" -lt 1 ]] || [[ "$c_sel" -gt "$count" ]]; then
+            echo -e "\n❌ انتخاب '$c_sel' نامعتبر است. رد شدن..."
+            continue
+        fi
+        
+        local new_country="${country_list[$((c_sel-1))]}"
+        new_country="${new_country//_/ }"
+        
+        echo -e "\n=============================================="
+        echo -e " 🚀 در حال پردازش کشور: $new_country"
+        echo -e "=============================================="
+        
+        local base_id="${new_country// /_}"
+        base_id="${base_id^^}"
+        base_id=$(echo "$base_id" | tr -cd 'A-Z0-9_')
+        
+        local node_id="$base_id"
+        local counter=2
+        
+        while grep -q "^NODE_${node_id}=" "$ENV_FILE"; do
+            node_id="${base_id}_${counter}"
+            ((counter++))
+        done
+        
+        # پیدا کردن بالاترین پورت فعلی به صورت هوشمند
+        local suggested_port=1082
+        if grep -q "^NODE_" "$ENV_FILE"; then
+            local max_p=$(grep "^NODE_" "$ENV_FILE" | cut -d: -f2 | sort -n | tail -1 || true)
+            if [[ -n "$max_p" ]] && [[ "$max_p" -ge 1082 ]]; then
+                suggested_port=$((max_p + 1))
+            fi
+        fi
+        local new_port=$suggested_port
+        
+        echo "📌 شناسه نود: $node_id | پورت اختصاصی: $new_port"
+        
+        local safe_country="${new_country// /_}"
+        echo "NODE_${node_id}=${safe_country}:${new_port}" >> "$ENV_FILE"
+        generate_compose
+        
+        echo "در حال ساخت کانتینر $node_id..."
+        if ! docker compose up -d --remove-orphans; then
+            echo -e "❌ خطا در راه‌اندازی کانتینر. لغو نصب این نود..."
+            sed -i "/^NODE_${node_id}=/d" "$ENV_FILE" || true
+            generate_compose
+            continue
+        fi
+        
+        echo "⏳ در حال برقراری تونل امن (لطفاً ۲۰ ثانیه شکیبا باشید)..."
+        sleep 20
+        
+        echo "در حال تست کیفیت شبکه..."
+        if do_ping_test "$new_port"; then
+            echo -e "✅ نود $new_country با موفقیت نصب و تایید شد."
+        else
+            echo -e "❌ ارتباط با سرور $new_country برقرار نشد. در حال حذف نود..."
+            docker compose rm -sf "vpn-${node_id,,}" "socks-${node_id,,}" >/dev/null 2>&1 || true
+            sed -i "/^NODE_${node_id}=/d" "$ENV_FILE" || true
+            generate_compose
+            docker compose up -d --remove-orphans >/dev/null 2>&1 || true
+        fi
     done
     
-    echo -e "✅ کشور انتخاب شده: $new_country"
-    echo -e "📌 شناسه نود به صورت خودکار تعیین شد: $node_id\n"
-    
-    local suggested_port=1082
-    if grep -q "^NODE_" "$ENV_FILE"; then
-        local max_p
-        max_p=$(grep "^NODE_" "$ENV_FILE" | cut -d: -f2 | sort -n | tail -1 || true)
-        if [[ -n "$max_p" ]] && [[ "$max_p" -ge 1082 ]]; then
-            suggested_port=$((max_p + 1))
-        fi
-    fi
-    
-    read -rp "پورت SOCKS5 اختصاصی [$suggested_port]: " new_port
-    new_port=${new_port:-$suggested_port}
-    
-    local safe_country="${new_country// /_}"
-    echo "NODE_${node_id}=${safe_country}:${new_port}" >> "$ENV_FILE"
-    generate_compose
-    
-    echo "در حال ساخت کانتینر $node_id..."
-    if ! docker compose up -d --remove-orphans; then
-        echo -e "\n❌ خطا در راه‌اندازی کانتینر داکر پیش آمد!"
-        echo "--- لاگ خطا ---"
-        docker compose logs --tail=15 "vpn-${node_id,,}" | grep -i -E "error|warn|fatal|failed" || true
-        echo "---------------"
-        echo "⚠️ در حال پاک‌سازی نود نصب نشده..."
-        sed -i "/^NODE_${node_id}=/d" "$ENV_FILE" || true
-        generate_compose
-        return
-    fi
-    
-    echo "⏳ در حال برقراری تونل امن (لطفاً ۲۰ ثانیه شکیبا باشید)..."
-    sleep 20
-    
-    echo "در حال تست کیفیت شبکه..."
-    if do_ping_test "$new_port"; then
-        echo -e "\n✅ نود با موفقیت تایید و به لیست نهایی اضافه شد."
-    else
-        echo -e "\n❌ ارتباط با سرور $new_country برقرار نشد!"
-        echo -e "--- خلاصه لاگ خطا ---"
-        docker compose logs --tail=15 "vpn-${node_id,,}" | grep -i -E "error|warn|fatal" || docker compose logs --tail=10 "vpn-${node_id,,}" || true
-        echo -e "----------------------"
-        echo "⚠️ در حال حذف نود معیوب و بازگردانی تنظیمات..."
-        
-        docker compose rm -sf "vpn-${node_id,,}" "socks-${node_id,,}" >/dev/null 2>&1 || true
-        sed -i "/^NODE_${node_id}=/d" "$ENV_FILE" || true
-        generate_compose
-        docker compose up -d --remove-orphans >/dev/null 2>&1 || true
-        
-        echo "نود اضافه نشد. لطفاً وضعیت شبکه سرور خود را بررسی نمایید."
-    fi
+    echo -e "\n🎉 عملیات پردازش گروهی نودها به پایان رسید."
 }
 
 edit_node_port() {
@@ -527,7 +529,7 @@ while true; do
     echo "             NordX-Pro SOCKS Manager"
     echo "=============================================="
     echo "  1) 👁️  لیست نودهای فعال"
-    echo "  2) ➕ افزودن نود جدید"
+    echo "  2) ➕ افزودن نود جدید (تکی یا گروهی)"
     echo "  3) ✏️  تغییر پورت یک نود"
     echo "  4) ➖ حذف یک نود"
     echo "  5) ⚡ تست اتصال و پینگ نود"
