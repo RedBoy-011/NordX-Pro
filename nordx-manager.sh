@@ -99,7 +99,7 @@ list_nodes() {
         local port=$(echo "$val" | cut -d: -f2)
         local status=$(docker inspect -f '{{.State.Status}}' "nord-socks-${node_id,,}" 2>/dev/null || echo "توقف/ناموجود")
         
-        printf "نود: %-8s | کشور: %-18s | پورت: %-6s | وضعیت: %s\n" "$node_id" "$country" "$port" "$status"
+        printf "نود: %-18s | کشور: %-18s | پورت: %-6s | وضعیت: %s\n" "$node_id" "$country" "$port" "$status"
     done
 }
 
@@ -107,9 +107,9 @@ view_logs() {
     list_nodes
     echo -e "\n--- مشاهده لاگ نودها ---"
     echo "می‌توانید شناسه یک نود خاص را وارد کنید یا با کلمه ALL لاگ همه را ببینید."
-    read -rp 'شناسه نود (مثلا DE یا ALL): ' log_id
+    read -rp 'شناسه نود (مثلا GERMANY یا ALL): ' log_id
     log_id=${log_id^^}
-    log_id=${log_id// /_} # حذف فاصله‌های احتمالی
+    log_id=${log_id// /_}
     
     if [[ "$log_id" == "ALL" ]]; then
         docker compose logs --tail=50
@@ -118,6 +118,39 @@ view_logs() {
         docker compose logs --tail=50 "vpn-${log_id,,}" "socks-${log_id,,}"
     else
         echo "❌ شناسه نامعتبر است."
+    fi
+}
+
+do_ping_test() {
+    local target_port=$1
+    local auth_args=""
+    if [[ "$REQUIRE_AUTH" == "true" ]]; then
+        auth_args="-U $PROXY_USER:$PROXY_PASSWORD"
+    fi
+
+    local response
+    response=$(curl $auth_args --silent --show-error --max-time 15 -w "\nTIME_TOTAL:%{time_total}" --socks5-hostname "127.0.0.1:$target_port" http://ip-api.com/json || echo "FAILED")
+    
+    if [[ "$response" == *"FAILED"* || -z "$response" ]]; then
+         echo -e "❌ تست ناموفق بود. اتصال برقرار نشد."
+         return 1
+    fi
+    
+    local body=$(echo "$response" | sed -e 's/TIME_TOTAL:.*//')
+    local time_val=$(echo "$response" | grep -o 'TIME_TOTAL:.*' | cut -d: -f2)
+    local ping_ms=$(awk "BEGIN {print int($time_val * 1000)}")
+    local check_status=$(echo "$body" | jq -r '.status' 2>/dev/null || echo "fail")
+    
+    if [[ "$check_status" == "success" ]]; then
+        echo -e "✅ اتصال برقرار شد:"
+        echo "   - کشور واقعی: $(echo "$body" | jq -r '.country')"
+        echo "   - آی‌پی: $(echo "$body" | jq -r '.query')"
+        echo "   - آی‌اس‌پی: $(echo "$body" | jq -r '.isp')"
+        echo "   - زمان پاسخ: ${ping_ms}ms"
+        return 0
+    else
+        echo "❌ مشکل در دریافت اطلاعات از سرور تست."
+        return 1
     fi
 }
 
@@ -164,12 +197,20 @@ add_node() {
     local new_country="${country_list[$((c_sel-1))]}"
     new_country="${new_country//_/ }"
     
-    echo -e "✅ کشور انتخاب شده: $new_country\n"
+    # تولید خودکار شناسه نود (نام کشور)
+    local base_id="${new_country// /_}"
+    base_id="${base_id^^}"
+    local node_id="$base_id"
+    local counter=2
     
-    read -rp 'شناسه نود (مثلا DE): ' node_id
-    # حذف فاصله‌ها و کاراکترهای غیرمجاز برای جلوگیری از خرابی فایل env
-    node_id=${node_id// /_}
-    node_id=${node_id^^}
+    # بررسی وجود نود و اضافه کردن عدد در صورت تکراری بودن
+    while grep -q "^NODE_${node_id}=" "$ENV_FILE"; do
+        node_id="${base_id}_${counter}"
+        ((counter++))
+    done
+    
+    echo -e "✅ کشور انتخاب شده: $new_country"
+    echo -e "📌 شناسه نود به صورت خودکار تعیین شد: $node_id\n"
     
     local suggested_port=1081
     if grep -q "^NODE_" "$ENV_FILE"; then
@@ -193,7 +234,7 @@ add_node() {
     sleep 20
     
     echo "در حال تست کیفیت شبکه..."
-    if test_node "$new_port"; then
+    if do_ping_test "$new_port"; then
         echo -e "\n✅ نود با موفقیت تایید و به لیست نهایی اضافه شد."
     else
         echo -e "\n❌ ارتباط با سرور $new_country برقرار نشد!"
@@ -207,7 +248,7 @@ add_node() {
         generate_compose
         docker compose up -d --remove-orphans >/dev/null 2>&1 || true
         
-        echo "نود اضافه نشد. لطفاً کشور دیگری را تست کنید یا وضعیت شبکه سرور خود را بررسی نمایید."
+        echo "نود اضافه نشد. لطفاً وضعیت شبکه سرور خود را بررسی نمایید."
     fi
 }
 
@@ -256,40 +297,52 @@ remove_node() {
     echo "✅ نود $rm_id با موفقیت حذف شد."
 }
 
-test_node() {
-    local target_port=${1:-}
-    if [[ -z "$target_port" ]]; then
-        read -rp 'پورت SOCKS5 جهت تست (مثلا 1081): ' target_port
-    fi
-    
-    local auth_args=""
-    if [[ "$REQUIRE_AUTH" == "true" ]]; then
-        auth_args="-U $PROXY_USER:$PROXY_PASSWORD"
+test_node_menu() {
+    echo -e "\n--- تست کیفیت شبکه نودها ---"
+    if ! grep -q "^NODE_" "$ENV_FILE"; then
+        echo "هیچ نودی برای تست وجود ندارد."
+        return
     fi
 
-    local response
-    response=$(curl $auth_args --silent --show-error --max-time 15 -w "\nTIME_TOTAL:%{time_total}" --socks5-hostname "127.0.0.1:$target_port" http://ip-api.com/json || echo "FAILED")
+    local -a node_ports=()
+    local -a node_names=()
+    local i=1
     
-    if [[ "$response" == *"FAILED"* || -z "$response" ]]; then
-         echo -e "❌ تست ناموفق بود. اتصال برقرار نشد."
-         return 1
+    echo "  0) 🌐 تست تمامی نودها (آزمایش همه پشت سر هم)"
+    while read -r line; do
+        local nid=$(echo "$line" | cut -d= -f1 | sed 's/NODE_//')
+        local val=$(echo "$line" | cut -d= -f2)
+        local country=$(echo "$val" | cut -d: -f1)
+        local port=$(echo "$val" | cut -d: -f2)
+        node_ports+=("$port")
+        node_names+=("$nid")
+        echo "  $i) نود: $nid | کشور: $country | پورت: $port"
+        ((i++))
+    done < <(grep "^NODE_" "$ENV_FILE")
+
+    local count=${#node_ports[@]}
+    echo ""
+    read -rp "شماره نود جهت تست را وارد کنید (0-$count): " t_sel
+    
+    if [[ -z "$t_sel" ]]; then
+        echo "عملیات لغو شد."
+        return
     fi
-    
-    local body=$(echo "$response" | sed -e 's/TIME_TOTAL:.*//')
-    local time_val=$(echo "$response" | grep -o 'TIME_TOTAL:.*' | cut -d: -f2)
-    local ping_ms=$(awk "BEGIN {print int($time_val * 1000)}")
-    local check_status=$(echo "$body" | jq -r '.status' 2>/dev/null || echo "fail")
-    
-    if [[ "$check_status" == "success" ]]; then
-        echo -e "✅ اتصال برقرار شد:"
-        echo "   - کشور واقعی: $(echo "$body" | jq -r '.country')"
-        echo "   - آی‌پی: $(echo "$body" | jq -r '.query')"
-        echo "   - آی‌اس‌پی: $(echo "$body" | jq -r '.isp')"
-        echo "   - زمان پاسخ: ${ping_ms}ms"
-        return 0
+
+    if ! [[ "$t_sel" =~ ^[0-9]+$ ]] || [[ "$t_sel" -lt 0 ]] || [[ "$t_sel" -gt "$count" ]]; then
+        echo "❌ انتخاب نامعتبر است."
+        return
+    fi
+
+    if [[ "$t_sel" -eq 0 ]]; then
+        for (( j=0; j<count; j++ )); do
+            echo -e "\n--- در حال تست نود ${node_names[$j]} (پورت ${node_ports[$j]}) ---"
+            do_ping_test "${node_ports[$j]}" || true
+        done
     else
-        echo "مشکل در دریافت اطلاعات از سرور تست."
-        return 1
+        local sel_idx=$((t_sel-1))
+        echo -e "\n--- در حال تست نود ${node_names[$sel_idx]} (پورت ${node_ports[$sel_idx]}) ---"
+        do_ping_test "${node_ports[$sel_idx]}"
     fi
 }
 
@@ -340,7 +393,7 @@ while true; do
         1) list_nodes; pause_menu ;;
         2) add_node; pause_menu ;;
         3) remove_node; pause_menu ;;
-        4) test_node; pause_menu ;;
+        4) test_node_menu; pause_menu ;;
         5) view_logs; pause_menu ;;
         6) restart_all_nodes; pause_menu ;;
         7) update_project; pause_menu ;;
