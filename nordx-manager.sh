@@ -197,13 +197,11 @@ add_node() {
     local new_country="${country_list[$((c_sel-1))]}"
     new_country="${new_country//_/ }"
     
-    # تولید خودکار شناسه نود (نام کشور)
     local base_id="${new_country// /_}"
     base_id="${base_id^^}"
     local node_id="$base_id"
     local counter=2
     
-    # بررسی وجود نود و اضافه کردن عدد در صورت تکراری بودن
     while grep -q "^NODE_${node_id}=" "$ENV_FILE"; do
         node_id="${base_id}_${counter}"
         ((counter++))
@@ -212,11 +210,11 @@ add_node() {
     echo -e "✅ کشور انتخاب شده: $new_country"
     echo -e "📌 شناسه نود به صورت خودکار تعیین شد: $node_id\n"
     
-    local suggested_port=1081
+    local suggested_port=1082
     if grep -q "^NODE_" "$ENV_FILE"; then
         local max_p
         max_p=$(grep "^NODE_" "$ENV_FILE" | cut -d: -f2 | sort -n | tail -1)
-        if [[ -n "$max_p" ]]; then
+        if [[ -n "$max_p" ]] && [[ "$max_p" -ge 1082 ]]; then
             suggested_port=$((max_p + 1))
         fi
     fi
@@ -250,6 +248,79 @@ add_node() {
         
         echo "نود اضافه نشد. لطفاً وضعیت شبکه سرور خود را بررسی نمایید."
     fi
+}
+
+edit_node_port() {
+    echo -e "\n--- تغییر پورت SOCKS5 یک نود ---"
+    if ! grep -q "^NODE_" "$ENV_FILE"; then
+        echo "هیچ نودی برای ویرایش وجود ندارد."
+        return
+    fi
+
+    local -a node_ids=()
+    local -a node_countries=()
+    local -a node_ports=()
+    local i=1
+    
+    echo "لیست نودهای فعال:"
+    while read -r line; do
+        local nid=$(echo "$line" | cut -d= -f1 | sed 's/NODE_//')
+        local val=$(echo "$line" | cut -d= -f2)
+        local country=$(echo "$val" | cut -d: -f1)
+        local port=$(echo "$val" | cut -d: -f2)
+        node_ids+=("$nid")
+        node_countries+=("$country")
+        node_ports+=("$port")
+        echo "  $i) نود: $nid | کشور: $country | پورت فعلی: $port"
+        ((i++))
+    done < <(grep "^NODE_" "$ENV_FILE")
+
+    local count=${#node_ids[@]}
+    echo ""
+    read -rp "شماره نود جهت تغییر پورت را وارد کنید (1-$count) [یا 0 برای انصراف]: " edit_sel
+    
+    if [[ "$edit_sel" == "0" || -z "$edit_sel" ]]; then
+        echo "عملیات لغو شد."
+        return
+    fi
+
+    if ! [[ "$edit_sel" =~ ^[0-9]+$ ]] || [[ "$edit_sel" -lt 1 ]] || [[ "$edit_sel" -gt "$count" ]]; then
+        echo "❌ انتخاب نامعتبر است."
+        return
+    fi
+
+    local sel_idx=$((edit_sel-1))
+    local target_id="${node_ids[$sel_idx]}"
+    local target_country="${node_countries[$sel_idx]}"
+    local old_port="${node_ports[$sel_idx]}"
+    
+    local suggested_port=1082
+    if grep -q "^NODE_" "$ENV_FILE"; then
+        local max_p
+        max_p=$(grep "^NODE_" "$ENV_FILE" | cut -d: -f2 | sort -n | tail -1)
+        if [[ -n "$max_p" ]] && [[ "$max_p" -ge 1082 ]]; then
+            suggested_port=$((max_p + 1))
+        fi
+    fi
+    
+    read -rp "پورت SOCKS5 جدید را وارد کنید [$suggested_port]: " new_port
+    new_port=${new_port:-$suggested_port}
+    
+    if [[ "$new_port" == "$old_port" ]]; then
+        echo "⚠️ پورت وارد شده با پورت فعلی یکسان است. تغییری اعمال نشد."
+        return
+    fi
+
+    echo "در حال بروزرسانی پورت نود $target_id به $new_port..."
+    sed -i "s/^NODE_${target_id}=.*/NODE_${target_id}=${target_country}:${new_port}/" "$ENV_FILE"
+    generate_compose
+    
+    docker compose up -d --remove-orphans "vpn-${target_id,,}" "socks-${target_id,,}" >/dev/null 2>&1 || true
+    echo "✅ پورت SOCKS5 نود $target_id با موفقیت به $new_port تغییر یافت."
+    
+    echo "⏳ در حال برقراری مجدد تونل امن..."
+    sleep 5
+    do_ping_test "$new_port" || true
 }
 
 remove_node() {
@@ -379,26 +450,28 @@ while true; do
     echo "=============================================="
     echo "  1) 👁️  لیست نودهای فعال"
     echo "  2) ➕ افزودن نود جدید"
-    echo "  3) ➖ حذف یک نود"
-    echo "  4) ⚡ تست اتصال و پینگ نود"
-    echo "  5) 📜 مشاهده لاگ کانتینرها"
-    echo "  6) 🔄 ریستارت تمامی نودها"
-    echo "  7) ⬇️  آپدیت اسکریپت از گیت‌هاب"
-    echo "  8) 🗑️  حذف کامل پروژه"
-    echo "  9) 🚪 خروج"
+    echo "  3) ✏️  تغییر پورت یک نود"
+    echo "  4) ➖ حذف یک نود"
+    echo "  5) ⚡ تست اتصال و پینگ نود"
+    echo "  6) 📜 مشاهده لاگ کانتینرها"
+    echo "  7) 🔄 ریستارت تمامی نودها"
+    echo "  8) ⬇️  آپدیت اسکریپت از گیت‌هاب"
+    echo "  9) 🗑️  حذف کامل پروژه"
+    echo " 10) 🚪 خروج"
     echo "=============================================="
-    read -rp 'انتخاب شما [1-9]: ' choice
+    read -rp 'انتخاب شما [1-10]: ' choice
 
     case $choice in
         1) list_nodes; pause_menu ;;
         2) add_node; pause_menu ;;
-        3) remove_node; pause_menu ;;
-        4) test_node_menu; pause_menu ;;
-        5) view_logs; pause_menu ;;
-        6) restart_all_nodes; pause_menu ;;
-        7) update_project; pause_menu ;;
-        8) uninstall_project ;;
-        9) clear; exit 0 ;;
+        3) edit_node_port; pause_menu ;;
+        4) remove_node; pause_menu ;;
+        5) test_node_menu; pause_menu ;;
+        6) view_logs; pause_menu ;;
+        7) restart_all_nodes; pause_menu ;;
+        8) update_project; pause_menu ;;
+        9) uninstall_project ;;
+        10) clear; exit 0 ;;
         *) echo "❌ انتخاب نامعتبر."; pause_menu ;;
     esac
 done
