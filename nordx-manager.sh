@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Name: nordx-manager.sh
 set -euo pipefail
 
 PROJECT_DIR="/opt/NordX-Pro"
@@ -27,7 +26,7 @@ if [[ ! -f $ENV_FILE ]]; then
         read -rsp 'SOCKS5 Password: ' sx_pass; echo
     fi
     
-    cat <<EOF > $ENV_FILE
+    cat <<EOF> $ENV_FILE
 NORDVPN_USERNAME=$nv_user
 NORDVPN_PASSWORD=$nv_pass
 REQUIRE_AUTH=$req_auth
@@ -41,7 +40,7 @@ fi
 source $ENV_FILE
 
 generate_compose() {
-    cat <<EOF > $COMPOSE_FILE
+    cat <<EOF> $COMPOSE_FILE
 services:
 EOF
     
@@ -51,7 +50,7 @@ EOF
         local country=$(echo "$val" | cut -d: -f1)
         local port=$(echo "$val" | cut -d: -f2)
 
-        cat <<EOF >> $COMPOSE_FILE
+        cat <<EOF>> $COMPOSE_FILE
   vpn-${node_id,,}:
     image: qmcgaw/gluetun:v3.40.0
     container_name: nord-socks-${node_id,,}
