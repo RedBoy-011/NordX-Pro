@@ -26,7 +26,7 @@ if [[ ! -f $ENV_FILE ]]; then
         read -rsp 'SOCKS5 Password: ' sx_pass; echo
     fi
     
-    cat <<EOF> $ENV_FILE
+    cat <<EOF > $ENV_FILE
 NORDVPN_USERNAME=$nv_user
 NORDVPN_PASSWORD=$nv_pass
 REQUIRE_AUTH=$req_auth
@@ -40,7 +40,7 @@ fi
 source $ENV_FILE
 
 generate_compose() {
-    cat <<EOF> $COMPOSE_FILE
+    cat <<EOF > $COMPOSE_FILE
 services:
 EOF
     
@@ -50,7 +50,7 @@ EOF
         local country=$(echo "$val" | cut -d: -f1)
         local port=$(echo "$val" | cut -d: -f2)
 
-        cat <<EOF>> $COMPOSE_FILE
+        cat <<EOF >> $COMPOSE_FILE
   vpn-${node_id,,}:
     image: qmcgaw/gluetun:v3.40.0
     container_name: nord-socks-${node_id,,}
@@ -94,13 +94,57 @@ list_nodes() {
         local port=$(echo "$val" | cut -d: -f2)
         local status=$(docker inspect -f '{{.State.Status}}' "nord-socks-${node_id,,}" 2>/dev/null || echo "توقف/ناموجود")
         
-        printf "نود: %-4s | کشور: %-15s | پورت داخلی: %-6s | وضعیت: %s\n" "$node_id" "$country" "$port" "$status"
+        printf "نود: %-4s | کشور: %-18s | پورت: %-6s | وضعیت: %s\n" "$node_id" "$country" "$port" "$status"
     done
 }
 
 add_node() {
     echo -e "\n--- افزودن نود جدید ---"
-    read -rp 'نام کشور (مثلا Germany, Turkey, UAE): ' new_country
+    echo "در حال دریافت لیست زنده کشورهای فعال از NordVPN..."
+    
+    # دریافت لیست کشورها از API، جایگزینی فاصله با آندرلاین برای پردازش بهتر در آرایه‌های Bash
+    local api_req
+    api_req=$(curl --silent --max-time 10 https://api.nordvpn.com/v1/servers/countries | jq -r '.[].name' 2>/dev/null | sed 's/ /_/g' | sort || true)
+    
+    local -a country_list
+    if [[ -n "$api_req" ]]; then
+        country_list=($api_req)
+    else
+        echo "⚠️ ارتباط با API کند بود. بارگذاری لیست پشتیبان..."
+        country_list=(Australia Austria Belgium Brazil Bulgaria Canada Croatia Czech_Republic Denmark Finland France Germany Greece Hong_Kong Hungary Iceland Ireland Israel Italy Japan Latvia Luxembourg Mexico Netherlands Norway Poland Portugal Romania Serbia Singapore Slovakia Slovenia South_Africa Spain Sweden Switzerland Turkey Ukraine United_Arab_Emirates United_Kingdom United_States)
+    fi
+
+    local count=${#country_list[@]}
+    local cols=3
+    local rows=$(( (count + cols - 1) / cols ))
+
+    echo -e "\nکشورهای در دسترس (انتخاب با شماره):\n"
+    for (( i=0; i<rows; i++ )); do
+        local line=""
+        for (( j=0; j<cols; j++ )); do
+            local idx=$(( j * rows + i ))
+            if [[ $idx -lt $count ]]; then
+                local c_name="${country_list[$idx]}"
+                line+=$(printf "%2d) %-22s" $((idx+1)) "${c_name//_/ }")
+            fi
+        done
+        echo "$line"
+    done
+
+    echo ""
+    read -rp "شماره کشور مورد نظر را وارد کنید (1-$count): " c_sel
+    
+    if ! [[ "$c_sel" =~ ^[0-9]+$ ]] || [[ "$c_sel" -lt 1 ]] || [[ "$c_sel" -gt "$count" ]]; then
+        echo "❌ انتخاب نامعتبر. بازگشت به منو."
+        return
+    fi
+    
+    # بازگرداندن آندرلاین‌ها به فاصله برای داکر
+    local new_country="${country_list[$((c_sel-1))]}"
+    new_country="${new_country//_/ }"
+    
+    echo -e "✅ کشور انتخاب شده: $new_country\n"
+    
     read -rp 'شناسه نود (مثلا DE): ' node_id
     read -rp 'پورت SOCKS5 اختصاصی (مثلا 1081): ' new_port
     
@@ -109,10 +153,10 @@ add_node() {
     echo "NODE_${node_id}=${new_country}:${new_port}" >> $ENV_FILE
     generate_compose
     
-    echo "در حال اجرای نود ${new_country}..."
+    echo "در حال ساخت و راه‌اندازی کانتینر $node_id..."
     docker compose up -d --remove-orphans
     
-    echo "نود جدید مستقر شد. در حال انجام تست..."
+    echo "نود مستقر شد. در حال انجام تست کیفیت شبکه..."
     sleep 3
     test_node "$new_port"
 }
@@ -128,9 +172,9 @@ remove_node() {
         sed -i "/^NODE_${rm_id}=/d" $ENV_FILE
         generate_compose
         docker compose up -d --remove-orphans
-        echo "نود $rm_id حذف شد و فایل داکر بروزرسانی گردید."
+        echo "✅ نود $rm_id با موفقیت حذف شد."
     else
-        echo "شناسه نامعتبر است."
+        echo "❌ شناسه نامعتبر است."
     fi
 }
 
@@ -140,7 +184,7 @@ test_node() {
         read -rp 'پورت SOCKS5 جهت تست (مثلا 1081): ' target_port
     fi
     
-    echo "در حال تست ارتباط، لوکیشن و پینگ..."
+    echo "در حال تست ارتباط، لوکیشن واقعی و پینگ..."
     
     local auth_args=""
     if [[ "$REQUIRE_AUTH" == "true" ]]; then
@@ -151,7 +195,7 @@ test_node() {
     response=$(curl $auth_args --silent --show-error --max-time 15 -w "\nTIME_TOTAL:%{time_total}" --socks5-hostname "127.0.0.1:$target_port" http://ip-api.com/json || echo "FAILED")
     
     if [[ "$response" == *"FAILED"* || -z "$response" ]]; then
-         echo -e "❌ تست ناموفق بود. کانتینر در حال راه‌اندازی است یا اتصال مسدود شده است."
+         echo -e "❌ تست ناموفق بود. اتصال برقرار نشد."
          return
     fi
     
@@ -162,10 +206,10 @@ test_node() {
     
     if [[ "$check_status" == "success" ]]; then
         echo -e "✅ اتصال برقرار شد:"
-        echo "   - کشور: $(echo "$body" | jq -r '.country')"
+        echo "   - کشور واقعی: $(echo "$body" | jq -r '.country')"
         echo "   - آی‌پی: $(echo "$body" | jq -r '.query')"
         echo "   - آی‌اس‌پی: $(echo "$body" | jq -r '.isp')"
-        echo "   - پینگ: ${ping_ms}ms"
+        echo "   - زمان پاسخ: ${ping_ms}ms"
     else
         echo "مشکل در دریافت اطلاعات از سرور تست."
     fi
@@ -176,7 +220,7 @@ update_project() {
     git stash push -m "Backup configs" >/dev/null 2>&1 || true
     git pull origin main
     chmod +x "$PROJECT_DIR/nordx-manager.sh"
-    echo "آپدیت انجام شد (اطلاعات اتصال شما حفظ شده است)."
+    echo "✅ آپدیت انجام شد (تنظیمات شما حفظ شده است)."
 }
 
 uninstall_project() {
@@ -186,7 +230,7 @@ uninstall_project() {
         rm -f /usr/bin/nordx
         cd /
         rm -rf "$PROJECT_DIR"
-        echo "پروژه NordX-Pro به طور کامل حذف شد."
+        echo "🗑️ پروژه NordX-Pro به طور کامل حذف شد."
         exit 0
     fi
 }
@@ -195,13 +239,13 @@ while true; do
     echo -e "\n=============================================="
     echo "             NordX-Pro SOCKS Manager"
     echo "=============================================="
-    echo "  1) لیست نودهای فعال"
-    echo "  2) افزودن نود جدید"
-    echo "  3) حذف یک نود"
-    echo "  4) تست اتصال و پینگ نود"
-    echo "  5) آپدیت اسکریپت از گیت‌هاب"
-    echo "  6) حذف کامل پروژه"
-    echo "  7) خروج"
+    echo "  1) 👁️  لیست نودهای فعال"
+    echo "  2) ➕ افزودن نود جدید"
+    echo "  3) ➖ حذف یک نود"
+    echo "  4) ⚡ تست اتصال و پینگ نود"
+    echo "  5) 🔄 آپدیت اسکریپت از گیت‌هاب"
+    echo "  6) 🗑️  حذف کامل پروژه"
+    echo "  7) 🚪 خروج"
     echo "=============================================="
     read -rp 'انتخاب شما [1-7]: ' choice
 
@@ -213,6 +257,6 @@ while true; do
         5) update_project ;;
         6) uninstall_project ;;
         7) clear; exit 0 ;;
-        *) echo "انتخاب نامعتبر." ;;
+        *) echo "❌ انتخاب نامعتبر." ;;
     esac
 done
