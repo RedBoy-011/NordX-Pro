@@ -103,6 +103,23 @@ list_nodes() {
     done
 }
 
+view_logs() {
+    list_nodes
+    echo -e "\n--- مشاهده لاگ نودها ---"
+    echo "می‌توانید شناسه یک نود خاص را وارد کنید یا با کلمه ALL لاگ همه را ببینید."
+    read -rp 'شناسه نود (مثلا DE یا ALL): ' log_id
+    log_id=${log_id^^}
+    
+    if [[ "$log_id" == "ALL" ]]; then
+        docker compose logs --tail=50
+    elif grep -q "^NODE_${log_id}=" "$ENV_FILE"; then
+        echo "--- نمایش ۵۰ خط آخر لاگ برای نود $log_id ---"
+        docker compose logs --tail=50 "vpn-${log_id,,}" "socks-${log_id,,}"
+    else
+        echo "❌ شناسه نامعتبر است."
+    fi
+}
+
 add_node() {
     echo -e "\n--- افزودن نود جدید ---"
     echo "در حال دریافت لیست زنده کشورهای فعال از NordVPN..."
@@ -164,15 +181,34 @@ add_node() {
     read -rp "پورت SOCKS5 اختصاصی [$suggested_port]: " new_port
     new_port=${new_port:-$suggested_port}
     
+    # ثبت موقت در فایل کانفیگ
     echo "NODE_${node_id}=${new_country}:${new_port}" >> $ENV_FILE
     generate_compose
     
-    echo "در حال ساخت و راه‌اندازی کانتینر $node_id..."
-    docker compose up -d --remove-orphans || { echo "❌ خطا در اجرای داکر."; return; }
+    echo "در حال ساخت کانتینر $node_id..."
+    docker compose up -d --remove-orphans || true
     
-    echo "نود مستقر شد. در حال انجام تست کیفیت شبکه..."
-    sleep 3
-    test_node "$new_port" || true
+    echo "⏳ در حال برقراری تونل امن (لطفاً ۲۰ ثانیه شکیبا باشید)..."
+    sleep 20
+    
+    echo "در حال تست کیفیت شبکه..."
+    if test_node "$new_port"; then
+        echo -e "\n✅ نود با موفقیت تایید و به لیست نهایی اضافه شد."
+    else
+        echo -e "\n❌ ارتباط با سرور $new_country برقرار نشد!"
+        echo -e "--- خلاصه لاگ خطا ---"
+        docker compose logs --tail=15 "vpn-${node_id,,}" | grep -i -E "error|warn|fatal" || docker compose logs --tail=10 "vpn-${node_id,,}" || true
+        echo -e "----------------------"
+        echo "⚠️ در حال حذف نود معیوب و بازگردانی تنظیمات..."
+        
+        # Rollback: حذف از فایل و متوقف کردن کانتینر
+        docker compose rm -sf "vpn-${node_id,,}" "socks-${node_id,,}" >/dev/null 2>&1 || true
+        sed -i "/^NODE_${node_id}=/d" "$ENV_FILE"
+        generate_compose
+        docker compose up -d --remove-orphans >/dev/null 2>&1 || true
+        
+        echo "نود اضافه نشد. لطفاً کشور دیگری را تست کنید یا وضعیت شبکه سرور خود را بررسی نمایید."
+    fi
 }
 
 remove_node() {
@@ -197,8 +233,6 @@ test_node() {
     if [[ -z "$target_port" ]]; then
         read -rp 'پورت SOCKS5 جهت تست (مثلا 1081): ' target_port
     fi
-    
-    echo "در حال تست ارتباط، لوکیشن واقعی و پینگ..."
     
     local auth_args=""
     if [[ "$REQUIRE_AUTH" == "true" ]]; then
@@ -266,22 +300,24 @@ while true; do
     echo "  2) ➕ افزودن نود جدید"
     echo "  3) ➖ حذف یک نود"
     echo "  4) ⚡ تست اتصال و پینگ نود"
-    echo "  5) 🔄 ریستارت تمامی نودها"
-    echo "  6) ⬇️  آپدیت اسکریپت از گیت‌هاب"
-    echo "  7) 🗑️  حذف کامل پروژه"
-    echo "  8) 🚪 خروج"
+    echo "  5) 📜 مشاهده لاگ کانتینرها"
+    echo "  6) 🔄 ریستارت تمامی نودها"
+    echo "  7) ⬇️  آپدیت اسکریپت از گیت‌هاب"
+    echo "  8) 🗑️  حذف کامل پروژه"
+    echo "  9) 🚪 خروج"
     echo "=============================================="
-    read -rp 'انتخاب شما [1-8]: ' choice
+    read -rp 'انتخاب شما [1-9]: ' choice
 
     case $choice in
         1) list_nodes; pause_menu ;;
         2) add_node; pause_menu ;;
         3) remove_node; pause_menu ;;
         4) test_node; pause_menu ;;
-        5) restart_all_nodes; pause_menu ;;
-        6) update_project; pause_menu ;;
-        7) uninstall_project ;;
-        8) clear; exit 0 ;;
+        5) view_logs; pause_menu ;;
+        6) restart_all_nodes; pause_menu ;;
+        7) update_project; pause_menu ;;
+        8) uninstall_project ;;
+        9) clear; exit 0 ;;
         *) echo "❌ انتخاب نامعتبر."; pause_menu ;;
     esac
 done
