@@ -11,7 +11,7 @@ fi
 
 echo "در حال نصب و بروزرسانی پیش‌نیازها..."
 apt-get update -y
-apt-get install -y git ca-certificates curl jq awk
+apt-get install -y git ca-certificates curl jq
 
 if [[ -d "$BASE_DIR/.git" ]]; then
   cd "$BASE_DIR"
@@ -23,9 +23,10 @@ else
   cd "$BASE_DIR"
 fi
 
-# سیستم خودترمیم: رفع خطای فاصله‌های غیرمجاز در فایل کانفیگ نسخه‌های قبل
+# فیلتر سخت‌گیرانه: پاکسازی فایل کانفیگ از هرگونه خط خراب برای جلوگیری از کرش شدن ترمینال
 if [[ -f "$BASE_DIR/.env" ]]; then
-  awk 'BEGIN {FS="="; OFS="="} /^NODE_/ {gsub(/ /, "_", $1); print} !/^NODE_/ {print}' "$BASE_DIR/.env" > "$BASE_DIR/.env.tmp" && mv "$BASE_DIR/.env.tmp" "$BASE_DIR/.env"
+  grep -E '^(NORDVPN_USERNAME|NORDVPN_PASSWORD|REQUIRE_AUTH|PROXY_USER|PROXY_PASSWORD|NODE_[A-Z0-9_]+)=' "$BASE_DIR/.env" > "$BASE_DIR/.env.tmp" || true
+  mv "$BASE_DIR/.env.tmp" "$BASE_DIR/.env"
 fi
 
 chmod +x "$BASE_DIR/nordx-manager.sh"
